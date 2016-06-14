@@ -90,9 +90,12 @@ uint8_t  newButton;
 #define crcEEPROM       bae910.memory.field.reserved    // [uint16_t] used for EEPROM saving
 #define clientID        bae910.memory.field.alarmc      // [uint8_t]  1 wire client ID (maybe duty4?)
 #define controlEEPROM   bae910.memory.field.maxcps      // [uint16_t] used to (re)store EEPROM data
-                                                        // 0xBCBC = store config to EEPROM
-                                                        // 0xBEEF = reload config from EEPROM
-                                                        // 0xDEAD = restore default values (no EEPROM change)
+#define CTRL_Save2EEPROM    4321                        //  = store config to EEPROM
+#define CTRL_RestoreEEPROM  4711                        //  = reload config from EEPROM
+#define CTRL_ResetConfig     815                        //  = restore default values (no EEPROM change)
+//#define CTRL_Save2EEPROM    0xBCBC                      //  = store config to EEPROM
+//#define CTRL_RestoreEEPROM  0xBEEF                      //  = reload config from EEPROM
+//#define CTRL_ResetConfig    0xDEAD                      //  = restore default values (no EEPROM change)
 
 #define currentMillis   bae910.memory.field.rtc         // [uint32_t]
 #define internalState1  bae910.memory.field.userc       // [uint8_t]
@@ -101,18 +104,18 @@ uint8_t  newButton;
 #define lastButtonADC   bae910.memory.field.adc10       // [uint16_t] last ADC value read
 
 #define lastTempButton  bae910.memory.field.count       // [uint32_t]
-#define lastBtnEvent1   bae910.memory.field.adctotp
-#define lastBtnEvent2   bae910.memory.field.adctotn
+#define lastPosChange1  bae910.memory.field.adctotp
+#define lastPosChange2  bae910.memory.field.adctotn
 #define lastStateChg1   bae910.memory.field.alct
 #define lastStateChg2   bae910.memory.field.alrt
-#define lastPosChange1  bae910.memory.field.unused0x4e
-#define lastPosChange2  bae910.memory.field.unused0x52
-#define lastMoveOpen1   bae910.memory.field.userm       // [uint32_t] could be changed to a flag: last direction!
-#define lastMoveOpen2   bae910.memory.field.usern
-#define lastMoveClose1  bae910.memory.field.usero
-#define lastMoveClose2  bae910.memory.field.userp
+#define lastBtnEvent1   bae910.memory.field.userm       // [uint32_t]
+#define lastBtnEvent2   bae910.memory.field.usern
+#define lastLongpress1  bae910.memory.field.usero
+#define lastLongpress2  bae910.memory.field.userp
 #define lastMoveLength1 bae910.memory.field.useri       // [uint16_t] duration of last movement
 #define lastMoveLength2 bae910.memory.field.userj
+#define lastMoveState1  bae910.memory.field.usere       // [uint8_t]  last direction moved
+#define lastMoveState2  bae910.memory.field.userf
 //#ifdef _WINDOWS
 //  #define currentPos1   myGlobalWnd->Position1
 //  #define currentPos2   myGlobalWnd->Position2
@@ -135,7 +138,7 @@ uint8_t  newButton;
 //#define postrunLength   bae910.memory.field.duty4       // [uint16_t] keep on moving for 4s, if we think the end is reached
 
 #define buttonSettle    bae910.memory.field.rtcc        // [uint8_t]  state must not change in this time to be treated as valid
-#define buttonInterval  bae910.memory.field.pioc        // [uint8_t]  interval at which to read button state
+
 #define buttonLongpress bae910.memory.field.duty1       // [uint16_t] minimum length for long button press
 #define holdLongpress   bae910.memory.field.duty2       // [uint16_t] hold long press mode after button release for ...ms
 #define directionReset  bae910.memory.field.duty3       // [uint16_t] single button mode: move up on second request, reset to down after 15s
@@ -147,12 +150,14 @@ uint8_t  newButton;
 #define relayAssignment bae910.memory.field.stalledcnt  // [uint16_t]
 
 /* unused fields left:
+    uint32_t unused0x52;
+    uint32_t unused0x4e;
     uint16_t userl;
     uint16_t userk;
     uint8_t  userh;
     uint8_t  userg;
-    uint8_t  userf;
-    uint8_t  usere;
+//    uint8_t  userf;
+//    uint8_t  usere;
     uint16_t selectcnt;
     uint16_t resetcnt;
     uint16_t alcps;
@@ -169,6 +174,7 @@ uint8_t  newButton;
     uint16_t adcan; // read-only
     uint16_t adcap; // read-only
     uint16_t duty4; // in (copied) EEPROM!
+    uint8_t  pioc   // in (copied) EEPROM!
 */
 
 #define timeDiff(previous) (unsigned long)(currentMillis - previous)
