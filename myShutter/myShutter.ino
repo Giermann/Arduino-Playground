@@ -2,6 +2,9 @@
  *    Example-Code that emulates various Sensor - mostly for development
  *    --> attach sensors as needed
  *    Tested with https://github.com/PaulStoffregen/OneWire on the other side as Master
+ *    
+ *    ISSUES:
+ *    - when setting stopPos via 1-wire while moving, it just stops without going to stopPos
  */
 
 #include "Shutter.h"
@@ -113,10 +116,10 @@ void updateShutterPos(uint8_t internalState, uint8_t &currentPos, uint8_t &stopP
         // moved too far, but then stop now
         if (currentPos > stopPos) stopPos = currentPos;
     }
-#ifdef _DEBUG
-    Serial.print(_T("position: "));
-    Serial.println(currentPos);
-#endif
+//#ifdef _DEBUG
+//    Serial.print(_T("position: "));
+//    Serial.println(currentPos);
+//#endif
 }
 
 //
@@ -194,7 +197,11 @@ void checkShutter()
 {
     currentMillis = millis();
     lastButtonADC = analogRead(buttonAPin);
-    newButton     = (lastButtonADC < minADCbutton2 ? 0x03 : (lastButtonADC < minADCbutton1 ? 0x02 : (lastButtonADC < minADCidle ? 0x01 : 0x00)));
+    newButton     = ((controlEEPROM == CTRL_LockButtonMode) ? 0 :
+                    ((lastButtonADC < minADCbutton2)        ? 3 :
+                    ((lastButtonADC < minADCbutton1)        ? 2 :
+                    ((lastButtonADC < minADCidle)           ? 1 :
+                    0))));
 
 /*
 #ifdef _BLINK
@@ -234,16 +241,16 @@ void checkShutter()
         tempButton = newButton;
         lastTempButton = currentMillis;
     } else if (timeDiff(lastTempButton) > buttonSettle) {
-        // waited long enough to accept the new button state
+        // waited long enough to accept the new button state (if not in lock button mode)
         if (defaultDirOpen == 0) {
             //
             // 2-button, single window
             //
 
             // do nothing when both buttons are pressed
-//            if ((newButton != currentButton) && ((newButton & 3) == 3)) {
             if ((newButton & 3) == 3) {
                 stopPos1 = currentPos1;
+                newButton = 0; // stop long press moves as well!
                 //Serial.println(_T("both buttons pressed"));
             } else {
                 handleButton(internalState1, currentPos1, (currentButton & 1), (newButton & 1), lastBtnEvent1, lastLongpress1, stopPos1, btnClosePos1);
@@ -269,11 +276,14 @@ void checkShutter()
     
     if (internalState1 != S_IDLE) lastMoveState1 = internalState1;
     if (internalState2 != S_IDLE) lastMoveState2 = internalState2;
+}
 
-    relayState  = ((internalState1 == S_MOVE_OPEN)  ? ( relayAssignment      & 0x0F) : 0x00);
-    relayState |= ((internalState1 == S_MOVE_CLOSE) ? ((relayAssignment>>4)  & 0x0F) : 0x00);
-    relayState |= ((internalState2 == S_MOVE_OPEN)  ? ((relayAssignment>>8)  & 0x0F) : 0x00);
-    relayState |= ((internalState2 == S_MOVE_CLOSE) ? ((relayAssignment>>12) & 0x0F) : 0x00);
+void setRelayState(bool bClose1, bool bOpen1, bool bClose2, bool bOpen2)
+{
+    relayState  = (bClose1 ? ( relayAssignment      & 0x0F) : 0x00);
+    relayState |= (bOpen1  ? ((relayAssignment>>4)  & 0x0F) : 0x00);
+    relayState |= (bClose2 ? ((relayAssignment>>8)  & 0x0F) : 0x00);
+    relayState |= (bOpen2  ? ((relayAssignment>>12) & 0x0F) : 0x00);
 
     digitalWrite(relayPin1, (relayState & 1) ? LED_ON : LED_OFF);
     digitalWrite(relayPin2, (relayState & 2) ? LED_ON : LED_OFF);
@@ -286,14 +296,14 @@ bool EEPROMget()
     crcEEPROM = 0;
 
     // stalledcnt, ovruncnt = relayAssignment, ADClowIdle   0x5A..0x5D
-    for (uint8_t i = 0x1D; i > 19; --i) {
-        bae910.memory.bytes[0x3F - i] = EEPROM.read(i);
+    for (uint8_t i = 0x1D; i > 0x19; --i) {
+        bae910.memory.bytes[0x3F - i] = EEPROM.read(i); // (i - 0x40) for real address
         crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x3F - i], crcEEPROM);
     }
 
     // maxan, maxap = ADClowButton1, ADClowButton2   0x1A..0x1D
-    for (uint8_t i = 0x19; i > 15; --i) {
-        bae910.memory.bytes[0x7B - i] = EEPROM.read(i);
+    for (uint8_t i = 0x19; i > 0x15; --i) {
+        bae910.memory.bytes[0x7B - i] = EEPROM.read(i); // (i - 4) for real address
         crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7B - i], crcEEPROM);
     }
 
@@ -320,30 +330,28 @@ bool EEPROMget()
     // check crcEEPROM or force to restore default values
     if ((reinterpret_cast<uint8_t *>(&crcEEPROM)[1] == EEPROM.read(1)) &&
         (reinterpret_cast<uint8_t *>(&crcEEPROM)[0] == EEPROM.read(0)) &&
-        (controlEEPROM != CTRL_ResetConfig)) {
+        (controlEEPROM != CTRL_RestoreDefaults)) {
         return true;
     }
 
     //
     // invalid CRC, use hard coded defaults
     //
-    bae910.memory.field.alarmc  = 0;      // 1 wire client ID
+    bae910.memory.field.alarmc  = bae910.ID[6];      // 1 wire client ID
     bae910.memory.field.outc    = 0;      // default OPEN position (0x00 = 2 button mode)
                                           // (OPEN on first press when closed more than ...%)
     bae910.memory.field.duty3   = 15000;  // direction reset in ms
                                           // (default to opposite direction within this time range)
-// obsolete!
-//    bae910.memory.field.duty4   = 2000;   // postrun duration in ms
-//                                          // (keep moving for ...ms after reaching top/bottom)
+    bae910.memory.field.duty4   = 4000;   // duration in ms for both relays ON to enter setup mode
 
-    bae910.memory.field.rtcc    = 20;     // button settle (must stay for at least ...ms)
+    bae910.memory.field.rtcc    = 50;     // button settle (must stay for at least ...ms); 20 sometimes flickers, 200 is slow in response!
+// obsolete!
 //    bae910.memory.field.pioc    = 100;    // button interval (can change after ...ms) [obsolete with button settle?]
     bae910.memory.field.duty1   = 1500;   // long press length in ms
     bae910.memory.field.duty2   = 3000;   // hold longpress mode for ...ms
 
-    bae910.memory.field.outc    = 70;     // single button mode: default to up direction if position >70%
-// obsolete!
-//    bae910.memory.field.outc    = 0 ;     // two button (single window) mode
+    bae910.memory.field.outc    = 50;     // single button mode: default to up direction if position >50%
+//    bae910.memory.field.outc    = 0;      // two button (single window) mode
     bae910.memory.field.adcc    = 0;      // button OPEN position A
     bae910.memory.field.cntc    = 0;      // button OPEN position B
     bae910.memory.field.tpm1c   = 194;    // button CLOSE position A  (100 and back to 94)
@@ -352,9 +360,10 @@ bool EEPROMget()
     bae910.memory.field.period1 = 300;    // position factor A
     bae910.memory.field.period2 = 300;    // position factor B
 
-    bae910.memory.field.maxap      = 785;    // ADClowButton1
-    bae910.memory.field.maxan      = 680;    // ADClowButton2
-    bae910.memory.field.ovruncnt   = 950;    // ADClowIdle
+    bae910.memory.field.maxan      = 666;    // ADClowButton2 (ex 680)
+    bae910.memory.field.maxap      = 775;    // ADClowButton1 (ex 785)
+    bae910.memory.field.ovruncnt   = 931;    // ADClowIdle    (ex 950)
+    // both=620, 2=712, 1=838..839, idle=1023
 
     bae910.memory.field.stalledcnt = 0x8421; // relayAssignment
     return false;
@@ -365,14 +374,14 @@ void EEPROMput()
     crcEEPROM = 0;
 
     // stalledcnt, ovruncnt = relayAssignment, ADClowIdle   0x5A..0x5D
-    for (uint8_t i = 0x1D; i > 19; --i) {
-        EEPROM.update(i, bae910.memory.bytes[0x3F - i]);
+    for (uint8_t i = 0x1D; i > 0x19; --i) {
+        EEPROM.update(i, bae910.memory.bytes[0x3F - i]); // (i - 0x40) for real address
         crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x3F - i], crcEEPROM);
     }
 
     // maxan, maxap = ADClowButton1, ADClowButton2   0x1A..0x1D
-    for (uint8_t i = 0x19; i > 15; --i) {
-        EEPROM.update(i, bae910.memory.bytes[0x7B - i]);
+    for (uint8_t i = 0x19; i > 0x15; --i) {
+        EEPROM.update(i, bae910.memory.bytes[0x7B - i]); // (i - 4) for real address
         crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7B - i], crcEEPROM);
     }
 
@@ -408,13 +417,16 @@ void setup()
     Serial.println("OneWire-Hub Test with various Sensors");
 #endif
 
+    controlEEPROM = CTRL_ReloadEEPROM; // load EEPROM in main loop
+/*
+    controlEEPROM = 0; // should be done in BAE init, but double check to avaoid restore defaults
     EEPROMget();
 
     // Setup OneWire
     bae910.ID[6] = clientID;
     bae910.ID[7] = bae910.crc8(bae910.ID, 7);
     hub.attach(bae910);
-
+*/
     // avoid holdLongpress after boot
     lastLongpress1 = -holdLongpress;
     lastLongpress2 = -holdLongpress;
@@ -471,14 +483,12 @@ bool blinking()
 void loop()
 {
     // following function must be called periodically
-//#ifndef _WINDOWS
     hub.poll();
 
   #ifndef ARDUINO_attiny
     // this part is just for debugging (dbg_HINT in OneWire.h must be enabled for output)
     if (hub.getError()) hub.printError();
   #endif
-//#endif
 #ifdef _BLINK
     if (cntBlink < 1) {
   #ifndef _WINDOWS
@@ -502,14 +512,15 @@ void loop()
     //
     // check if we have to copy to EEPROM
     //
-    if ((controlEEPROM == CTRL_Save2EEPROM) || (controlEEPROM == CTRL_ResetConfig)){
+    if ((controlEEPROM == CTRL_Save2EEPROM) || (controlEEPROM == CTRL_ReloadEEPROM) || (controlEEPROM == CTRL_RestoreDefaults)) {
         if (controlEEPROM == CTRL_Save2EEPROM)
             EEPROMput();
         else
             EEPROMget();
         controlEEPROM = 0;
         // re-attach device on ID change
-        if (bae910.ID[6] != clientID) {
+// SG, 03.05.2016 - always re-attach on those commands
+//        if (bae910.ID[6] != clientID) {
             hub.detach(bae910);
             bae910.ID[6] = clientID;
             bae910.ID[7] = bae910.crc8(bae910.ID, 7);
@@ -517,18 +528,63 @@ void loop()
 #ifndef ARDUINO_attiny
             if (hub.getError()) hub.printError();
 #endif
-        }
-    } else if (controlEEPROM == CTRL_RestoreEEPROM) {
+//        }
+/*
+    } else if (controlEEPROM == CTRL_ReloadEEPROM) {
         EEPROMget(); // only restores default
         controlEEPROM = 0;
         // keep device on ID
-        clientID = bae910.ID[6] != clientID;
+        clientID = bae910.ID[6];
+ */
+    } else if ((internalState1 == S_IDLE) && (internalState2 == S_IDLE) && 
+               (controlEEPROM >= CTRL_TestMode) && (controlEEPROM < (CTRL_SomfyAutoSetup + 4))) {
+        // special operation modes only allowed in IDLE mode
+        if (controlEEPROM > CTRL_SomfyDefaultRst) {
+            // always start with 1 setup period
+            setRelayState(controlEEPROM & 1, controlEEPROM & 1, controlEEPROM & 2, controlEEPROM & 2);
+            delay(setupLength);
+        }
+        if (controlEEPROM > CTRL_SomfyAutoSetup) {
+            // reset also for auto setup mode, so delay another 3s
+            delay(setupLength);
+            setRelayState(false, false, false, false);
+            delay(buttonLongpress);
+            // start auto setup with entering setup mode
+            setRelayState(controlEEPROM & 1, controlEEPROM & 1, controlEEPROM & 2, controlEEPROM & 2);
+            delay(setupLength);
+            setRelayState(false, false, false, false);
+            delay(buttonLongpress);
+            // setup auto ending by pressing UP for 3s
+            setRelayState(false, controlEEPROM & 1, false, controlEEPROM & 2);
+            delay(setupLength);
+            setRelayState(false, false, false, false);
+            delay(buttonLongpress);
+        }
+        if (controlEEPROM > CTRL_SomfySetupMode) {
+            // finish auto setup with one last setup mode
+            setRelayState(controlEEPROM & 1, controlEEPROM & 1, controlEEPROM & 2, controlEEPROM & 2);
+            delay(setupLength);
+            setRelayState(false, false, false, false);
+            controlEEPROM = 0;
+        } else {
+            // "normal" relay test mode, simply set relays
+            setRelayState(controlEEPROM & 1, controlEEPROM & 2, controlEEPROM & 4, controlEEPROM & 8);
+        }
+    } else if (controlEEPROM >= CTRL_TestMode) {
+        // invalid setting, reset
+        controlEEPROM = 0;
     }
 
     //
     // main routine
     //
-    checkShutter();
+    if (controlEEPROM < CTRL_TestMode) {
+        checkShutter();
+        setRelayState((internalState1 == S_MOVE_CLOSE),
+                      (internalState1 == S_MOVE_OPEN),
+                      (internalState2 == S_MOVE_CLOSE),
+                      (internalState2 == S_MOVE_OPEN));
+    }
 
 #ifdef _BLINK
     // Blink triggers the state-change
