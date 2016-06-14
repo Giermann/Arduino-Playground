@@ -6,7 +6,7 @@
   #define LED_OFF LOW
 
   #define relayPin1      4      // the pin numbers for all 4 relays
-  #define _DEBUG
+  //#define _DEBUG
   //#define _BLINK
   #ifdef _BLINK
     #define led_PIN      3
@@ -16,9 +16,9 @@
   #endif
   #define relayPin3      1
   #define relayPin4      2
-  // below are dummies for Windows
   #define buttonAPin     0
   #define buttonDPin     5
+// below are dummies for Windows
   #define onewirePin     0
   #define onewireClnt 0x0C
 //#elif defined( __AVR_ATtiny25__ ) | \
@@ -67,8 +67,9 @@
 
 
 #define S_IDLE            0x00
-#define S_MOVE_OPEN       0x01
-#define S_MOVE_CLOSE      0x02
+#define S_MOVE_CLOSE      0x01  // keep S_MOVE in sync with buttons (1 = close, 2 = open) ?
+#define S_MOVE_OPEN       0x02
+#define S_REVERSE_REQUEST 0x04
 
 // restore EEPROM to default and set client ID:
 // # ID=85
@@ -95,6 +96,7 @@
 #define tempButton      bae910.memory.field.unused0x35
 #define lastButtonADC   bae910.memory.field.adc10       // [uint16_t, read-only] last ADC value read
 
+#define initLast        0xFFFF0000                      // initialize lastPosChange/lastLongpress to -(max uint16_t)
 #define lastTempButton  bae910.memory.field.count       // [uint32_t]
 #define lastPosChange1  bae910.memory.field.adctotp
 #define lastPosChange2  bae910.memory.field.adctotn
@@ -111,13 +113,8 @@
 
 #define invalidPos      101
 #define switchStopPos   150                             // 100 < 'full open first' < switchStopPos < 'full close first'
-#ifdef _WINDOWS
-  #define currentPos1   myGlobalWnd->Position1
-  #define currentPos2   myGlobalWnd->Position2
-#else
-  #define currentPos1   bae910.memory.field.adc         // [uint8_t, read-only]  0 = opened, 100 = closed
-  #define currentPos2   bae910.memory.field.cnt
-#endif
+#define currentPos1     bae910.memory.field.adc         // [uint8_t, read-only]  0 = opened, 100 = closed
+#define currentPos2     bae910.memory.field.cnt
 #define stopPos1        bae910.memory.field.usera       // [uint8_t]  0..100 | 101..200 = move to one end and back to (stopPos - 100)
 #define stopPos2        bae910.memory.field.userb
 
