@@ -1,18 +1,17 @@
 /*
- *    Example-Code that emulates various Sensor - mostly for development
- *    --> attach sensors as needed
- *    Tested with https://github.com/PaulStoffregen/OneWire on the other side as Master
+ *    Shutter controller
+ *    (c) 2016 Sven Giermann
  *    
  *    ISSUES:
- *    - when setting stopPos via 1-wire while moving, it just stops without going to stopPos
- *      (current WORKAROUND: move to end and back)
- *    - occasionally restarts, resetting currentPos to invalidPos :(
- *      (WORKAROUND: set known currentPos via 1-Wire, but try to avoid resets with capacitor?)
- *    - TODO: further reduce code size!!
+ *    - when setting stopPos>100 via 1-wire while moving might move to wrong end first
+ *      (set stopPos=185 when moving up, moves completely up and back to 85)
  *
  *    HISTORY:
  *      02.06.2016 - add directionReset==0 (never), implement CTRL_SimulateMode
  *      07.06.2016 - implement CTRL_SimulateMode, reassigned some variables, fix stopPos from 1-Wire
+ *      13.06.2016 - reworked stopPos with S_REVERSE_REQUEST, optimized code size
+ *
+ *    CODE SIZE:    7.862 Bytes [1.6.9]
  */
 
 #include "Shutter.h"
@@ -40,25 +39,30 @@ BAE910 bae910   = BAE910(BAE910::family_code, onewireClnt, 0x00, 0x00, 0x00, 0x0
 
 //
 // compare code size:  define [7.504 Bytes], function [7.502 Bytes]
+//   13.06.2016 - swapped: define is 4 Bytes less than function
 //
 //#define timeDiff(previous) (unsigned long)(currentMillis - previous)
-//#define timeDiff(previous) (uint32_t)(currentMillis - previous)
-uint32_t timeDiff(uint32_t previous)
-{
-    return (currentMillis - previous);
-}
+#define timeDiff(previous) (uint32_t)(currentMillis - previous)
+//uint32_t timeDiff(uint32_t previous) { return (currentMillis - previous); }
 
 
 //
 // (2) check old and new button state
 //
-void handleButton(uint8_t internalState, uint8_t currentPos, bool currentBtn, bool newBtn, uint32_t &lastBtnEvent, uint32_t &lastLongpress, uint8_t &stopPos, uint8_t btnMovePos)
+void handleButton(uint8_t &internalState, uint8_t currentPos, bool currentBtn, bool newBtn, uint32_t &lastBtnEvent, uint32_t &lastLongpress, uint8_t &stopPos, uint8_t btnMovePos)
 {
-    if (newBtn && !currentBtn) {
+    if (newBtn == currentBtn) return;
+
+    if (newBtn) {
         // button down event
-        if ((stopPos == btnMovePos) || (timeDiff(lastLongpress) <= holdLongpress)) {
+        if ((timeDiff(lastLongpress) <= holdLongpress) || (stopPos == btnMovePos)) {
 #ifdef _DEBUG
             Serial.print(_T("fake long press inside hold timespan: "));
+            Serial.print(_T("["));
+            Serial.print(lastLongpress);
+            Serial.print(_T(".."));
+            Serial.print(currentMillis);
+            Serial.print(_T("]"));
             Serial.println(timeDiff(lastLongpress));
 #endif
             // same button when already moving, or within holdLongpress: fake long press
@@ -71,26 +75,26 @@ void handleButton(uint8_t internalState, uint8_t currentPos, bool currentBtn, bo
         }
 #ifdef _DEBUG
         Serial.print(_T("button down event, internalState (old) = "));
-        Serial.print(internalState);
+        Serial.print(internalState, BIN);
         Serial.print(_T(" - (new) stopPos = "));
         Serial.println(stopPos);
 #endif
-    } else if (!newBtn && currentBtn) {
+    } else {
         // button up event, keep moving on short press
         // TODO: if we use lastStateChg here, there's no need for lastBtnEvent anymore (but then fake lastStateChg above!)
         if (timeDiff(lastBtnEvent) > buttonLongpress) {
 #ifdef _DEBUG
-           Serial.print(_T("button up after long press: "));
-           Serial.println(timeDiff(lastBtnEvent));
+            Serial.print(_T("button up after long press: "));
+            Serial.println(timeDiff(lastBtnEvent));
 #endif
-           stopPos = currentPos;
-           // remember last long press for holdLongpress
-           lastLongpress = currentMillis;
+            stopPos = currentPos;
+            // remember last long press for holdLongpress
+            lastLongpress = currentMillis;
         }
         lastBtnEvent = currentMillis;
 #ifdef _DEBUG
         Serial.print(_T("button up event, internalState (old) = "));
-        Serial.print(internalState);
+        Serial.print(internalState, BIN);
         Serial.print(_T(" - (new) stopPos = "));
         Serial.println(stopPos);
 #endif
@@ -98,9 +102,9 @@ void handleButton(uint8_t internalState, uint8_t currentPos, bool currentBtn, bo
 }
 
 //
-// (0) check submitted 1-Wire stopPos for validity
+// (0) check submitted 1-Wire stopPos for validity (104 Bytes)
 //
-void checkStopPos(uint8_t internalState, uint8_t &currentPos, uint8_t &stopPos)
+void checkStopPos(uint8_t &internalState, uint8_t &currentPos, uint8_t &stopPos)
 {
     if (stopPos > 200) {
         stopPos = currentPos;
@@ -109,24 +113,30 @@ void checkStopPos(uint8_t internalState, uint8_t &currentPos, uint8_t &stopPos)
         // TODO: when only ONE change from invalidPos allowed, set stopPos = invalidPos in setup()!
         //
         currentPos = stopPos;
-    } else if (internalState == S_IDLE) {
+/*
+    } /*else if (internalState == S_IDLE) {
         //
         // TODO: temporarily workaround updateState() - remove, if corrected there
         //
         if (stopPos > 100) {
             // skip moving to end, directly move to desired position when in those ranges
             if (stopPos > switchStopPos) {
-                if (currentPos >= (stopPos - 100)) stopPos -= 100;
+                if (currentPos >= (stopPos%100)) stopPos -= 100;
             } else {
-                if (currentPos <= (stopPos - 100)) stopPos -= 100;
+                if (currentPos <= (stopPos%100)) stopPos -= 100;
             }
         }
-    } else if (internalState == S_MOVE_OPEN) {
+*/
+    } else if (internalState & S_MOVE_OPEN) {
         // move full open and then back to desired stopPos
-        if ((stopPos <= 100) && (stopPos > currentPos)) stopPos += 100;
-    } else if (internalState == S_MOVE_CLOSE) {
+        if ((stopPos > currentPos) && (stopPos <= 100))
+            internalState |= S_REVERSE_REQUEST;
+        //if ((stopPos > currentPos) && (stopPos <= 100)) stopPos += 100;
+    } else if (internalState & S_MOVE_CLOSE) {
         // move full close and then back to desired stopPos
-        if (stopPos < currentPos) stopPos += 100;
+        if (stopPos < currentPos)
+            internalState |= S_REVERSE_REQUEST;
+        //if (stopPos < currentPos) stopPos += 100;
     }
     // IDLE:
     // - normal action
@@ -147,18 +157,19 @@ void checkStopPos(uint8_t internalState, uint8_t &currentPos, uint8_t &stopPos)
 //
 // (1) calculate new shutter position
 //
-void updateShutterPos(uint8_t internalState, uint8_t &currentPos, uint8_t &stopPos, uint32_t &lastPosChange, uint16_t positionFactor)
+void updateShutterPos(uint8_t &internalState, uint8_t &currentPos, uint8_t &stopPos, uint32_t &lastPosChange, uint16_t positionFactor)
 {
-    if (internalState == S_MOVE_OPEN) {
-        while ((currentPos > 0) && (timeDiff(lastPosChange) > positionFactor)) {
+    if (internalState & S_MOVE_OPEN) {
+        while ((timeDiff(lastPosChange) > positionFactor) && (currentPos > 0)) {
             lastPosChange += positionFactor;
             if (stopPos == currentPos) stopPos--; // do not move back later, when only moved too far
             currentPos--;
         }
         // OLD: moved too far, but then stop now
+        //if (currentPos < stopPos) stopPos = currentPos;
         //if ((currentPos < stopPos) && (stopPos <= 100)) stopPos = currentPos;
-    } else if (internalState == S_MOVE_CLOSE) {
-        while ((currentPos < 100) && (timeDiff(lastPosChange) > positionFactor)) {
+    } else if (internalState & S_MOVE_CLOSE) {
+        while ((timeDiff(lastPosChange) > positionFactor) && (currentPos < 100)) {
             lastPosChange += positionFactor;
             if (stopPos == currentPos) stopPos++; // do not move back later, when only moved too far
             currentPos++;
@@ -177,7 +188,7 @@ void updateShutterPos(uint8_t internalState, uint8_t &currentPos, uint8_t &stopP
 //
 void updateState(uint8_t &internalState, uint8_t currentPos, uint8_t &stopPos, bool currentBtn, uint32_t &lastPosChange, uint32_t &lastStateChg, uint16_t &lastMoveLength)
 {
-    uint8_t newState = internalState;
+    uint8_t newState = internalState & ~S_REVERSE_REQUEST;
 
     // keep state if button still pressed
     if (currentBtn && (internalState != S_IDLE)) return;
@@ -185,37 +196,21 @@ void updateState(uint8_t &internalState, uint8_t currentPos, uint8_t &stopPos, b
     // determine new state from stopPos
     if (stopPos == currentPos) {
         newState = S_IDLE;
-    } else if (stopPos > 100) {
+    } else {
         if (internalState == S_IDLE) {
             //
             // TODO: get first direction from currentPos instead of switchStopPos ?!
             //
-            newState = (stopPos > switchStopPos) ? S_MOVE_CLOSE : S_MOVE_OPEN;
-/* SG, 07.06.2016 - should be obsolete now, since it's done when calling handleButton()
-            if (stopPos > switchStopPos) {
-                // first CLOSE to 100, don't move back when inside this range
-                newState = S_MOVE_CLOSE;
-                if (currentPos >= (stopPos - 100)) stopPos = 100;
-            } else {
-                // first OPEN to 0, don't move back when inside this range
-                newState = S_MOVE_OPEN;
-                if (currentPos <= (stopPos - 100)) stopPos = 0;
-            }
- */
-        } else if ((internalState == S_MOVE_CLOSE) && (currentPos > 99)) {
-            newState = S_MOVE_OPEN;
-            stopPos -= 100;
-        } else if ((internalState == S_MOVE_OPEN) && (currentPos < 1)) {
-            newState = S_MOVE_CLOSE;
+            newState = (stopPos > currentPos) ? S_MOVE_CLOSE : S_MOVE_OPEN;
+            //newState = (stopPos > switchStopPos) ? S_MOVE_CLOSE : S_MOVE_OPEN;
+        } else if ((stopPos > 100) && ((currentPos > 99) || ((currentPos < 1) && (internalState & S_MOVE_OPEN)))) {
+            internalState |= S_REVERSE_REQUEST;
             stopPos -= 100;
         }
-    //
-    // TODO: also move to 100 / 0 for stopPos<100 / >0 when currentPos in this range ??
-    //
-    } else if (stopPos < currentPos) {
-        newState = S_MOVE_OPEN;
-    } else {
-        newState = S_MOVE_CLOSE;
+
+        if (internalState & S_REVERSE_REQUEST) {
+            newState ^= (S_MOVE_OPEN | S_MOVE_CLOSE);
+        }
     }
 
     // trace state change timings
@@ -223,7 +218,8 @@ void updateState(uint8_t &internalState, uint8_t currentPos, uint8_t &stopPos, b
         if (internalState != S_IDLE) {
             // stop moving
             lastMoveLength = timeDiff(lastStateChg);
-        } else {
+        } //else {
+        if (newState != S_IDLE) {
             // start moving
 #ifdef _DEBUG
             Serial.print((lastMoveState1 == S_MOVE_OPEN) ? _T("lastMoveOpen: ") : _T("lastMoveClose: "));
@@ -232,9 +228,9 @@ void updateState(uint8_t &internalState, uint8_t currentPos, uint8_t &stopPos, b
             Serial.println(directionReset);
             Serial.print(_T("currentPos = "));
             Serial.print(currentPos);
-            Serial.print(_T(" ?? < ?? "));
+            Serial.print(_T(" < "));
             Serial.print(defaultDirOpen);
-            Serial.print(_T(", stopPos = "));
+            Serial.print(_T(" (?), stopPos = "));
             Serial.print(stopPos);
             Serial.println(_T(" - start moving..."));
 #endif
@@ -245,6 +241,26 @@ void updateState(uint8_t &internalState, uint8_t currentPos, uint8_t &stopPos, b
     }
 }
 
+// helper functions (reduce code size)
+uint8_t getOpenPos(uint8_t currentPos, uint8_t btnOpenPos)
+{
+    return ((currentPos > (btnOpenPos%100)) ? btnOpenPos : 0);
+}
+uint8_t getClosePos(uint8_t currentPos, uint8_t btnClosePos)
+{
+    return ((currentPos < (btnClosePos%100)) ? btnClosePos : 100);
+}
+uint8_t guessStopPos(uint32_t lastPosChange, uint8_t lastMoveState, uint8_t currentPos, uint8_t btnOpenPos, uint8_t btnClosePos)
+{
+    return
+                (((timeDiff(lastPosChange) < directionReset) || (directionReset == 0)) ?
+                 (lastMoveState == S_MOVE_OPEN) : (currentPos < defaultDirOpen)) ?
+//                (((timeDiff(lastPosChange) > directionReset) && (directionReset > 0)) ?
+//                 (currentPos < defaultDirOpen) : (lastMoveState == S_MOVE_OPEN)) ?
+                getClosePos(currentPos, btnClosePos) : getOpenPos(currentPos, btnOpenPos)
+                ;
+}
+
 //
 // main shutter function
 //
@@ -253,11 +269,11 @@ void checkShutter()
     currentMillis     = millis();
     lastButtonADC     = analogRead(buttonAPin);
     uint8_t newButton =
-        ((controlEEPROM == CTRL_LockButtonMode) ? 0 :
-        ((lastButtonADC < minADCbutton2)        ? 3 :
-        ((lastButtonADC < minADCbutton1)        ? 2 :
-        ((lastButtonADC < minADCidle)           ? 1 :
-        0))));
+        (controlEEPROM == CTRL_LockButtonMode) ? 0 :
+        (lastButtonADC < minADCbutton2)        ? 3 :
+        (lastButtonADC < minADCbutton1)        ? 2 :
+        (lastButtonADC < minADCidle)           ? 1 :
+        0;
 
 /*
 #ifdef _BLINK
@@ -289,15 +305,23 @@ void checkShutter()
     updateShutterPos(internalState1, currentPos1, stopPos1, lastPosChange1, positionFactor1);
     updateShutterPos(internalState2, currentPos2, stopPos2, lastPosChange2, positionFactor2);
 
-    //
-    // SG, 08.03.2016 - try to minimize faults, ...wait for ADC to settle
-    //
+    // SG, 08.03.2016 - wait for ADC to settle, try to minimize faults
     if (newButton != tempButton) {
         // store last read value for next comparison
         tempButton = newButton;
         lastTempButton = currentMillis;
-    } else if (timeDiff(lastTempButton) > buttonSettle) {
+    // SG, 09.06.2016 - handle only button changes
+//    } else if ((timeDiff(lastTempButton) > buttonSettle) && (newButton != currentButton)) {     // 4 Bytes more!!
+    } else if (timeDiff(lastTempButton) > buttonSettle) if (newButton != currentButton) {
+//    } else if (newButton != currentButton) if (timeDiff(lastTempButton) > buttonSettle) {     // 16 Bytes more!!
+
         // waited long enough to accept the new button state (if not in lock button mode)
+#ifdef _DEBUG
+        Serial.print(_T("Accepted button state: "));
+        Serial.print(newButton);
+        Serial.print(_T(" - previous: "));
+        Serial.println(currentButton);
+#endif
         if (defaultDirOpen == 0) {
             //
             // 2-button, single window
@@ -311,48 +335,24 @@ void checkShutter()
             } else {
                 // assume shutter opened, if requested to close on invalidPos
                 if ((currentPos1 == invalidPos) && (currentButton & 1)) currentPos1 = 0;
+//                if ((currentButton & 1) && (currentPos1 == invalidPos)) currentPos1 = 0;    // 12 Bytes more
 
                 handleButton(internalState1, currentPos1, (currentButton & 1), (newButton & 1), lastBtnEvent1, lastLongpress1, stopPos1,
-//                    btnClosePos1
-                    (currentPos1 < btnClosePos1%100) ? btnClosePos1 : 100
+                    getClosePos(currentPos1, btnClosePos1)
                 );
                 handleButton(internalState1, currentPos1, (currentButton & 2), (newButton & 2), lastBtnEvent2, lastLongpress2, stopPos1,
-//                    btnOpenPos1
-                    (currentPos1 > btnOpenPos1%100) ? btnOpenPos1 : 0
+                    getOpenPos(currentPos1, btnOpenPos1)
                 );
             }
         } else {
             //
             // 1-button, both windows
             //
-
             handleButton(internalState1, currentPos1, (currentButton & 1), (newButton & 1), lastBtnEvent1, lastLongpress1, stopPos1,
-                (((directionReset > 0) && (timeDiff(lastPosChange1) > directionReset)) ?
-                 (currentPos1 < defaultDirOpen) : (lastMoveState1 == S_MOVE_OPEN)) ?
-                ((currentPos1 < btnClosePos1%100) ? btnClosePos1 : 100) :
-                (currentPos1 > btnOpenPos1%100) ? btnOpenPos1 : 0
-/*
-                btnClosePos1 :
-                btnOpenPos1
-                --
-                ((directionReset == 0) || (timeDiff(lastPosChange1) < directionReset)) ? 
-                ((lastMoveState1 == S_MOVE_CLOSE) ? btnOpenPos1  : btnClosePos1) : 
-                ((currentPos1 < defaultDirOpen)   ? btnClosePos1 : btnOpenPos1)
- */
+                guessStopPos(lastPosChange1, lastMoveState1, currentPos1, btnOpenPos1, btnClosePos1)
             );
             handleButton(internalState2, currentPos2, (currentButton & 2), (newButton & 2), lastBtnEvent2, lastLongpress2, stopPos2,
-                (((directionReset > 0) && (timeDiff(lastPosChange2) > directionReset)) ?
-                 (currentPos2 < defaultDirOpen) : (lastMoveState2 == S_MOVE_OPEN)) ?
-                ((currentPos2 < btnClosePos2%100) ? btnClosePos2 : 100) :
-                ((currentPos2 > btnOpenPos2%100) ? btnOpenPos2 : 0)
-/*
-                btnClosePos2 :
-                btnOpenPos2
-                --
-                ((directionReset == 0) || (timeDiff(lastPosChange2) < directionReset)) ?
-                ((lastMoveState2 == S_MOVE_CLOSE) ? btnOpenPos2  : btnClosePos2) :
-                ((currentPos2 < defaultDirOpen)   ? btnClosePos2 : btnOpenPos2)
- */
+                guessStopPos(lastPosChange2, lastMoveState2, currentPos2, btnOpenPos2, btnClosePos2)
             );
         }
         currentButton = newButton;
@@ -375,16 +375,18 @@ void setRelayState(bool bClose1, bool bOpen1, bool bClose2, bool bOpen2)
     relayState |= (bClose2 ? ((relayAssignment>>8)  & 0x0F) : 0x00);
     relayState |= (bOpen2  ? ((relayAssignment>>12) & 0x0F) : 0x00);
 
-    digitalWrite(relayPin1, ((controlEEPROM != CTRL_SimulateMode) && (relayState & 1)) ? LED_ON : LED_OFF);
-    digitalWrite(relayPin2, ((controlEEPROM != CTRL_SimulateMode) && (relayState & 2)) ? LED_ON : LED_OFF);
-    digitalWrite(relayPin3, ((controlEEPROM != CTRL_SimulateMode) && (relayState & 4)) ? LED_ON : LED_OFF);
-    digitalWrite(relayPin4, ((controlEEPROM != CTRL_SimulateMode) && (relayState & 8)) ? LED_ON : LED_OFF);
+    digitalWrite(relayPin1, ((relayState & 1) && (controlEEPROM != CTRL_SimulateMode)) ? LED_ON : LED_OFF);
+    digitalWrite(relayPin2, ((relayState & 2) && (controlEEPROM != CTRL_SimulateMode)) ? LED_ON : LED_OFF);
+    digitalWrite(relayPin3, ((relayState & 4) && (controlEEPROM != CTRL_SimulateMode)) ? LED_ON : LED_OFF);
+    digitalWrite(relayPin4, ((relayState & 8) && (controlEEPROM != CTRL_SimulateMode)) ? LED_ON : LED_OFF);
 }
 
 bool EEPROMget()
 {
     crcEEPROM = 0;
 
+// always use default values on windows (wrong byte order)
+#ifndef _WINDOWS
     // stalledcnt, ovruncnt = relayAssignment, minADCidle   0x5A..0x5D
     for (uint8_t i = 0x1D; i > 0x19; --i) {
         bae910.memory.bytes[0x3F - i] = EEPROM.read(i); // (i - 0x40) for real address
@@ -423,6 +425,7 @@ bool EEPROMget()
         (controlEEPROM != CTRL_RestoreDefaults)) {
         return true;
     }
+#endif // _WINDOWS
 
     //
     // invalid CRC, use hard coded defaults
@@ -434,9 +437,9 @@ bool EEPROMget()
 
     buttonSettle    = 50;       // button settle (must stay for at least ...ms); 20 sometimes flickers, 200 is slow in response!
     buttonLongpress = 1500;     // long press length in ms
-    holdLongpress   = 3000;     // hold longpress mode for ...ms
+    holdLongpress   = 4000;     // hold longpress mode for ...ms
 
-    defaultDirOpen  = 50;       // single button mode: default to up direction if position >50%
+    defaultDirOpen  = 30;       // single button mode: default to up direction if position >30%
 //    defaultDirOpen  = 0;        // two button (single window) mode
     btnOpenPos1     = 0;        // button OPEN position A
     btnOpenPos2     = 0;        // button OPEN position B
@@ -500,20 +503,23 @@ void setup()
 {
 #ifndef ARDUINO_attiny
     Serial.begin(115200);
-    Serial.println("Shutter controller with OneWire-Hub");
+    Serial.println(_T("Shutter controller with OneWire-Hub"));
 #endif
 
-    controlEEPROM = CTRL_ReloadEEPROM; // load EEPROM in main loop
+    EEPROMget();
+    controlEEPROM = CTRL_ReloadEEPROM; // attach to hub in main loop
 
-    // initialize invalid position; open on first move
+    // initialize invalid position; open on first move (18 Bytes)
     currentPos1 = invalidPos;
     currentPos2 = invalidPos;
+    stopPos1 = invalidPos;
+    stopPos2 = invalidPos;
 
-    // avoid wrong assumptions after boot
-    lastLongpress1 = -holdLongpress;
-    lastLongpress2 = -holdLongpress;
-    lastPosChange1 = -directionReset;
-    lastPosChange2 = -directionReset;
+    // avoid wrong assumptions after boot (172 Bytes)
+    lastLongpress1 = initLast;
+    lastLongpress2 = initLast;
+    lastPosChange1 = initLast;
+    lastPosChange2 = initLast;
 
     // initialize the push button pin as an input:
     pinMode(buttonDPin, INPUT_PULLUP);
@@ -534,7 +540,7 @@ void setup()
 #endif
 
 #ifndef ARDUINO_attiny
-    Serial.println("config done");
+    Serial.println(_T("config done"));
 #endif
 }
 
@@ -574,9 +580,7 @@ void loop()
 #endif
 #ifdef _BLINK
     if (cntBlink < 1) {
-  #ifndef _WINDOWS
         cntBlink = hub.getError();
-  #endif
         if (cntBlink > 0) {
             nextMillis  = millis() + 5000;
             ledState = LED_OFF;
@@ -611,9 +615,27 @@ void loop()
         if (hub.getError()) hub.printError();
 #endif
         controlEEPROM = 0;
-    } else if ((internalState1 == S_IDLE) && (internalState2 == S_IDLE) && 
-               (controlEEPROM >= CTRL_TestMode) && (controlEEPROM < (CTRL_SomfyAutoSetup + 4))) {
+    }
+
+    //
+    // main routine
+    //
+    if (controlEEPROM < CTRL_TestMode) {
+        checkShutter();
+        //
+        // check for simulate here and remove from setRelayState saves 12 Bytes code, but does not update relayState
+        //
+        //if (controlEEPROM == CTRL_SimulateMode)
+        //    setRelayState(false, false, false, false);
+        //else
+        setRelayState((internalState1 & S_MOVE_CLOSE),
+                      (internalState1 & S_MOVE_OPEN),
+                      (internalState2 & S_MOVE_CLOSE),
+                      (internalState2 & S_MOVE_OPEN));
+    } else if ((controlEEPROM < (CTRL_SomfyAutoSetup + 4)) && (internalState1 == S_IDLE) && (internalState2 == S_IDLE)  ) {
+        //
         // special operation modes only allowed in IDLE mode
+        //
         if (controlEEPROM > CTRL_SomfyDefaultRst) {
             // always start with 1 setup period
             setRelayState(controlEEPROM & 1, controlEEPROM & 1, controlEEPROM & 2, controlEEPROM & 2);
@@ -645,20 +667,9 @@ void loop()
             // "normal" relay test mode, simply set relays
             setRelayState(controlEEPROM & 1, controlEEPROM & 2, controlEEPROM & 4, controlEEPROM & 8);
         }
-    } else if (controlEEPROM >= CTRL_TestMode) {
+    } else {
         // invalid setting, reset
         controlEEPROM = 0;
-    }
-
-    //
-    // main routine
-    //
-    if (controlEEPROM < CTRL_TestMode) {
-        checkShutter();
-        setRelayState((internalState1 == S_MOVE_CLOSE),
-                      (internalState1 == S_MOVE_OPEN),
-                      (internalState2 == S_MOVE_CLOSE),
-                      (internalState2 == S_MOVE_OPEN));
     }
 
 #ifdef _BLINK
