@@ -5,13 +5,16 @@
  *    ISSUES:
  *    - when setting stopPos>100 via 1-wire while moving might move to wrong end first
  *      (set stopPos=185 when moving up, moves completely up and back to 85)
+ *    - press different direction while moving stops instead of switching direction
+ *    - stopping with same direction starts holdLongpress (2 button mode; WORKAROUNG: set holdLongpress to 0)
+ *    - longPress does not start moving on ends (2 button mode)
  *
  *    HISTORY:
  *      02.06.2016 - add directionReset==0 (never), implement CTRL_SimulateMode
  *      07.06.2016 - implement CTRL_SimulateMode, reassigned some variables, fix stopPos from 1-Wire
  *      13.06.2016 - reworked stopPos with S_REVERSE_REQUEST, optimized code size
  *
- *    CODE SIZE:    7.862 Bytes [1.6.9]
+ *    CODE SIZE:    7.862 Bytes [1.6.9] (@home: 7.392) ... 7.420
  */
 
 #include "Shutter.h"
@@ -72,9 +75,12 @@ void handleButton(uint8_t &internalState, uint8_t currentPos, bool currentBtn, b
             // stop moving when different button pressed
             lastBtnEvent = currentMillis;
             stopPos = (internalState == S_IDLE) ? btnMovePos : currentPos;
+// TODO: try to stop on different button PRESS
+//            stopPos = btnMovePos;
+            internalState |= S_REVERSE_REQUEST;
         }
 #ifdef _DEBUG
-        Serial.print(_T("button down event, internalState (old) = "));
+        Serial.print(_T("button down event @internalState = "));
         Serial.print(internalState, BIN);
         Serial.print(_T(" - (new) stopPos = "));
         Serial.println(stopPos);
@@ -93,7 +99,7 @@ void handleButton(uint8_t &internalState, uint8_t currentPos, bool currentBtn, b
         }
         lastBtnEvent = currentMillis;
 #ifdef _DEBUG
-        Serial.print(_T("button up event, internalState (old) = "));
+        Serial.print(_T("button up event @internalState = "));
         Serial.print(internalState, BIN);
         Serial.print(_T(" - (new) stopPos = "));
         Serial.println(stopPos);
@@ -157,7 +163,7 @@ void checkStopPos(uint8_t &internalState, uint8_t &currentPos, uint8_t &stopPos)
 //
 // (1) calculate new shutter position
 //
-void updateShutterPos(uint8_t &internalState, uint8_t &currentPos, uint8_t &stopPos, uint32_t &lastPosChange, uint16_t positionFactor)
+void updateShutterPos(uint8_t internalState, uint8_t &currentPos, uint8_t &stopPos, uint32_t &lastPosChange, uint16_t positionFactor)
 {
     if (internalState & S_MOVE_OPEN) {
         while ((timeDiff(lastPosChange) > positionFactor) && (currentPos > 0)) {
@@ -188,28 +194,35 @@ void updateShutterPos(uint8_t &internalState, uint8_t &currentPos, uint8_t &stop
 //
 void updateState(uint8_t &internalState, uint8_t currentPos, uint8_t &stopPos, bool currentBtn, uint32_t &lastPosChange, uint32_t &lastStateChg, uint16_t &lastMoveLength)
 {
-    uint8_t newState = internalState & ~S_REVERSE_REQUEST;
+//    uint8_t newState = internalState & ~S_REVERSE_REQUEST;
+    uint8_t newState = internalState & (S_MOVE_OPEN | S_MOVE_CLOSE);
 
     // keep state if button still pressed
-    if (currentBtn && (internalState != S_IDLE)) return;
+    if (currentBtn && (newState != S_IDLE)) return;
 
     // determine new state from stopPos
     if (stopPos == currentPos) {
         newState = S_IDLE;
-    } else {
-        if (internalState == S_IDLE) {
-            //
-            // TODO: get first direction from currentPos instead of switchStopPos ?!
-            //
-            newState = (stopPos > currentPos) ? S_MOVE_CLOSE : S_MOVE_OPEN;
-            //newState = (stopPos > switchStopPos) ? S_MOVE_CLOSE : S_MOVE_OPEN;
-        } else if ((stopPos > 100) && ((currentPos > 99) || ((currentPos < 1) && (internalState & S_MOVE_OPEN)))) {
-            internalState |= S_REVERSE_REQUEST;
+    } else if (newState == S_IDLE) {
+        // get first direction from currentPos (instead of switchStopPos)
+        newState = (stopPos > currentPos) ? S_MOVE_CLOSE : S_MOVE_OPEN;
+    } else if (internalState & S_REVERSE_REQUEST) {
+#ifdef _DEBUG
+        Serial.print(_T("(b) State: "));
+        Serial.print(internalState, BIN);
+        Serial.print(_T(" -> "));
+        Serial.println(newState, BIN);
+#endif
+        newState ^= (S_MOVE_OPEN | S_MOVE_CLOSE);
+    }
+    // TODO: correct?? ALWAYS? or depends on state/newState ?
+    if (stopPos > 100) {
+        if ((internalState & S_MOVE_CLOSE) && (currentPos > 99)) {
+            newState = S_MOVE_OPEN;
             stopPos -= 100;
-        }
-
-        if (internalState & S_REVERSE_REQUEST) {
-            newState ^= (S_MOVE_OPEN | S_MOVE_CLOSE);
+        } else if ((internalState & S_MOVE_OPEN) && (currentPos < 1)) {
+            newState = S_MOVE_CLOSE;
+            stopPos -= 100;
         }
     }
 
@@ -218,21 +231,24 @@ void updateState(uint8_t &internalState, uint8_t currentPos, uint8_t &stopPos, b
         if (internalState != S_IDLE) {
             // stop moving
             lastMoveLength = timeDiff(lastStateChg);
-        } //else {
+        }
         if (newState != S_IDLE) {
             // start moving
 #ifdef _DEBUG
             Serial.print((lastMoveState1 == S_MOVE_OPEN) ? _T("lastMoveOpen: ") : _T("lastMoveClose: "));
             Serial.print(timeDiff(lastPosChange));
-            Serial.print(_T(" ?? < ?? "));
+            Serial.print(_T("  <  "));
             Serial.println(directionReset);
-            Serial.print(_T("currentPos = "));
+            Serial.print(_T(" (?), currentPos = "));
             Serial.print(currentPos);
             Serial.print(_T(" < "));
             Serial.print(defaultDirOpen);
             Serial.print(_T(" (?), stopPos = "));
             Serial.print(stopPos);
-            Serial.println(_T(" - start moving..."));
+            Serial.print(_T(" - start moving... "));
+            Serial.print(internalState, BIN);
+            Serial.print(_T(" -> "));
+            Serial.println(newState, BIN);
 #endif
             lastPosChange = currentMillis;
         }
@@ -324,7 +340,7 @@ void checkShutter()
 #endif
         if (defaultDirOpen == 0) {
             //
-            // 2-button, single window
+            // 2 button, single window
             //
 
             // do nothing when both buttons are pressed
@@ -343,15 +359,18 @@ void checkShutter()
                 handleButton(internalState1, currentPos1, (currentButton & 2), (newButton & 2), lastBtnEvent2, lastLongpress2, stopPos1,
                     getOpenPos(currentPos1, btnOpenPos1)
                 );
+                //checkStopPos(internalState1, currentPos1, stopPos1);
             }
         } else {
             //
-            // 1-button, both windows
+            // 1 button, 2 window mode
             //
             handleButton(internalState1, currentPos1, (currentButton & 1), (newButton & 1), lastBtnEvent1, lastLongpress1, stopPos1,
+                (internalState1 != S_IDLE) ? stopPos1 :   // 14 Bytes, but continues on long press!
                 guessStopPos(lastPosChange1, lastMoveState1, currentPos1, btnOpenPos1, btnClosePos1)
             );
             handleButton(internalState2, currentPos2, (currentButton & 2), (newButton & 2), lastBtnEvent2, lastLongpress2, stopPos2,
+                (internalState2 != S_IDLE) ? stopPos2 :   // 14 Bytes, but continues on long press!
                 guessStopPos(lastPosChange2, lastMoveState2, currentPos2, btnOpenPos2, btnClosePos2)
             );
         }
@@ -361,6 +380,7 @@ void checkShutter()
     //
     // set newState according desired stopPos
     //
+    // TODO: try to stop on different button PRESS
     updateState(internalState1, currentPos1, stopPos1, (defaultDirOpen == 0) ? (currentButton > 0) : (currentButton & 1), lastPosChange1, lastStateChg1, lastMoveLength1);
     updateState(internalState2, currentPos2, stopPos2, (defaultDirOpen == 0) ? false               : (currentButton & 2), lastPosChange2, lastStateChg2, lastMoveLength2);
     
@@ -440,7 +460,7 @@ bool EEPROMget()
     holdLongpress   = 4000;     // hold longpress mode for ...ms
 
     defaultDirOpen  = 30;       // single button mode: default to up direction if position >30%
-//    defaultDirOpen  = 0;        // two button (single window) mode
+    defaultDirOpen  = 0;        // two button (single window) mode
     btnOpenPos1     = 0;        // button OPEN position A
     btnOpenPos2     = 0;        // button OPEN position B
     btnClosePos1    = 185;      // button CLOSE position A  (100 and back to 85)
