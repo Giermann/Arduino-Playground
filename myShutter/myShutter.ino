@@ -50,64 +50,6 @@ BAE910 bae910   = BAE910(BAE910::family_code, onewireClnt, 0x00, 0x00, 0x00, 0x0
 
 
 //
-// (2) check old and new button state
-//
-void handleButton(uint8_t &internalState, uint8_t currentPos, bool currentBtn, bool newBtn, uint32_t &lastBtnEvent, uint32_t &lastLongpress, uint8_t &stopPos, uint8_t btnMovePos)
-{
-    if (newBtn == currentBtn) return;
-
-    if (newBtn) {
-        // button down event
-        if ((timeDiff(lastLongpress) <= holdLongpress) || (stopPos == btnMovePos)) {
-#ifdef _DEBUG
-            Serial.print(_T("fake long press inside hold timespan: "));
-            Serial.print(_T("["));
-            Serial.print(lastLongpress);
-            Serial.print(_T(".."));
-            Serial.print(currentMillis);
-            Serial.print(_T("]"));
-            Serial.println(timeDiff(lastLongpress));
-#endif
-            // same button when already moving, or within holdLongpress: fake long press
-            lastBtnEvent = currentMillis - buttonLongpress;
-            stopPos = btnMovePos;
-        } else {
-            // stop moving when different button pressed
-            lastBtnEvent = currentMillis;
-            stopPos = (internalState == S_IDLE) ? btnMovePos : currentPos;
-// TODO: try to stop on different button PRESS
-//            stopPos = btnMovePos;
-            internalState |= S_REVERSE_REQUEST;
-        }
-#ifdef _DEBUG
-        Serial.print(_T("button down event @internalState = "));
-        Serial.print(internalState, BIN);
-        Serial.print(_T(" - (new) stopPos = "));
-        Serial.println(stopPos);
-#endif
-    } else {
-        // button up event, keep moving on short press
-        // TODO: if we use lastStateChg here, there's no need for lastBtnEvent anymore (but then fake lastStateChg above!)
-        if (timeDiff(lastBtnEvent) > buttonLongpress) {
-#ifdef _DEBUG
-            Serial.print(_T("button up after long press: "));
-            Serial.println(timeDiff(lastBtnEvent));
-#endif
-            stopPos = currentPos;
-            // remember last long press for holdLongpress
-            lastLongpress = currentMillis;
-        }
-        lastBtnEvent = currentMillis;
-#ifdef _DEBUG
-        Serial.print(_T("button up event @internalState = "));
-        Serial.print(internalState, BIN);
-        Serial.print(_T(" - (new) stopPos = "));
-        Serial.println(stopPos);
-#endif
-    }
-}
-
-//
 // (0) check submitted 1-Wire stopPos for validity (104 Bytes)
 //
 void checkStopPos(uint8_t &internalState, uint8_t &currentPos, uint8_t &stopPos)
@@ -187,6 +129,64 @@ void updateShutterPos(uint8_t internalState, uint8_t &currentPos, uint8_t &stopP
 //    Serial.print(_T("position: "));
 //    Serial.println(currentPos);
 //#endif
+}
+
+//
+// (2) check old and new button state
+//
+void handleButton(uint8_t &internalState, uint8_t currentPos, bool currentBtn, bool newBtn, uint32_t &lastBtnEvent, uint32_t &lastLongpress, uint8_t &stopPos, uint8_t btnMovePos)
+{
+    if (newBtn == currentBtn) return;
+
+    if (newBtn) {
+        // button down event
+        if ((timeDiff(lastLongpress) <= holdLongpress) || (stopPos == btnMovePos)) {
+#ifdef _DEBUG
+            Serial.print(_T("fake long press inside hold timespan: "));
+            Serial.print(_T("["));
+            Serial.print(lastLongpress);
+            Serial.print(_T(".."));
+            Serial.print(currentMillis);
+            Serial.print(_T("]"));
+            Serial.println(timeDiff(lastLongpress));
+#endif
+            // same button when already moving, or within holdLongpress: fake long press
+            lastBtnEvent = currentMillis - buttonLongpress;
+            stopPos = btnMovePos;
+        } else {
+            // stop moving when different button pressed
+            lastBtnEvent = currentMillis;
+            stopPos = (internalState == S_IDLE) ? btnMovePos : currentPos;
+// TODO: try to stop on different button PRESS
+//            stopPos = btnMovePos;
+            internalState |= S_REVERSE_REQUEST;
+        }
+#ifdef _DEBUG
+        Serial.print(_T("button down event @internalState = "));
+        Serial.print(internalState, BIN);
+        Serial.print(_T(" - (new) stopPos = "));
+        Serial.println(stopPos);
+#endif
+    } else {
+        // button up event, keep moving on short press
+        // TODO: if we use lastStateChg here, there's no need for lastBtnEvent anymore (but then fake lastStateChg above!)
+        if (timeDiff(lastBtnEvent) > buttonLongpress) {
+#ifdef _DEBUG
+            Serial.print(_T("button up after long press: "));
+            Serial.println(timeDiff(lastBtnEvent));
+#endif
+            stopPos = currentPos;
+            // remember last long press for holdLongpress
+            lastLongpress = currentMillis;
+        }
+        lastBtnEvent = currentMillis;
+#ifdef _DEBUG
+        Serial.print(_T("button up event @internalState = "));
+        Serial.print(internalState, BIN);
+        Serial.print(_T(" - (new) stopPos = "));
+        Serial.println(stopPos);
+#endif
+    }
 }
 
 //
