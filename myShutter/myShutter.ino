@@ -17,9 +17,9 @@
  *      02.06.2016 - add directionReset==0 (never), implement CTRL_SimulateMode
  *      07.06.2016 - implement CTRL_SimulateMode, reassigned some variables, fix stopPos from 1-Wire
  *      13.06.2016 - reworked stopPos with S_REVERSE_REQUEST, optimized code size
- *      21.06.2016 - skip 1-Wire poll while moving, add relay offset (keep 0 for now), reworked handleButton/updateState
+ *      21.06.2016 - skip 1-Wire poll while moving, add relay offset (keep 0 for now)
  *
- *    CODE SIZE:    7.710 Bytes [1.6.9]
+ *    CODE SIZE:    7.680 Bytes [1.6.9] + 254 SRAM
  */
 
 #include "Shutter.h"
@@ -151,9 +151,13 @@ void updateShutterPos(uint8_t &internalState, uint8_t &currentPos, uint8_t &stop
 //
 // (2+3) check old and new button state and set status accordingly
 //
-void handleButtonStatus(uint8_t &internalState, uint8_t currentPos, bool currentBtn, bool newBtn, uint32_t &lastBtnEvent, uint32_t &lastLongpress, uint8_t &stopPos, uint8_t btnMovePos, uint32_t &lastPosChange, uint32_t &lastStateChg, uint16_t &lastMoveLength, uint8_t desiredState)
+void handleButtonStatus(uint8_t &internalState, uint8_t currentPos, bool currentBtn, bool newBtn, uint32_t &lastBtnEvent, uint32_t &lastLongpress, uint8_t &stopPos, uint8_t btnClosePos, uint8_t btnOpenPos, uint32_t &lastPosChange, uint32_t &lastStateChg, uint16_t &lastMoveLength, uint8_t desiredState)
+//void handleButtonStatus(uint8_t &internalState, uint8_t currentPos, bool currentBtn, bool newBtn, uint32_t &lastBtnEvent, uint32_t &lastLongpress, uint8_t &stopPos, uint8_t btnMovePos, uint32_t &lastPosChange, uint32_t &lastStateChg, uint16_t &lastMoveLength, uint8_t desiredState)
 {
 //    uint8_t newState = internalState & ~S_REVERSE_REQUEST;
+//
+// TODO: S_REVERSE_REQUEST is obsolete! (only keep S_RELAY_OFFSET)
+//
     uint8_t newState = internalState & (S_MOVE_OPEN | S_MOVE_CLOSE);
 
     if (newBtn) {
@@ -161,7 +165,8 @@ void handleButtonStatus(uint8_t &internalState, uint8_t currentPos, bool current
         newState = desiredState;
         if (!currentButton) {
             lastBtnEvent = currentMillis;
-            if ((timeDiff(lastLongpress) <= holdLongpress) || (stopPos == btnMovePos)) {
+            if ((timeDiff(lastLongpress) <= holdLongpress) || (internalState == desiredState)) {
+//            if ((timeDiff(lastLongpress) <= holdLongpress) || (stopPos == btnMovePos)) {
 #ifdef _DEBUG
                 Serial.print(_T("fake long press inside hold timespan: "));
                 Serial.println(timeDiff(lastLongpress));
@@ -171,7 +176,12 @@ void handleButtonStatus(uint8_t &internalState, uint8_t currentPos, bool current
             }
         }
         // TODO: move to button up case ?
-        stopPos = btnMovePos;
+        //
+        // TODO: prevent setting wrong direction when already moving in range 85..100
+        //
+        stopPos = (desiredState == S_MOVE_CLOSE) ?
+            (( (btnClosePos <= 100) || (currentPos == invalidPos) || (currentPos < (btnClosePos%100)) ) ? btnClosePos : 100) :
+            (( (btnOpenPos <= 100) || (currentPos == invalidPos) || (currentPos > (btnOpenPos%100)) ) ? btnOpenPos : 0);
     } else if (currentBtn) {
         // button up event, keep moving on short press
         // TODO: if we use lastStateChg here, there's no need for lastBtnEvent anymore (but then fake lastStateChg above!)
@@ -184,10 +194,8 @@ void handleButtonStatus(uint8_t &internalState, uint8_t currentPos, bool current
             newState = S_IDLE;
             // remember last long press for holdLongpress
             lastLongpress = currentMillis;
-        } else {
-            // TODO: move to button up case ?
-            //stopPos = btnMovePos;
 #ifdef _DEBUG
+        } else {
             Serial.print(_T("keep moving to (new) stopPos: "));
             Serial.println(stopPos);
 #endif
@@ -262,6 +270,13 @@ uint8_t guessMoveDir(uint32_t lastPosChange, uint8_t lastMoveState, uint8_t curr
 //                 (currentPos < defaultDirOpen) : (lastMoveState & S_MOVE_OPEN)) ?
                 S_MOVE_CLOSE : S_MOVE_OPEN
                 ;
+/*
+    bool doClose = (currentPos < defaultDirOpen);
+    if ((timeDiff(lastPosChange) < directionReset) || (directionReset == 0)) {
+        doClose = (lastMoveState == S_MOVE_OPEN);
+    }
+    return doClose ? S_MOVE_CLOSE : S_MOVE_OPEN;
+*/
 }
 
 //
@@ -314,6 +329,12 @@ void checkShutter()
         tempButton = newButton;
         lastTempButton = currentMillis;
     } else if (timeDiff(lastTempButton) > buttonSettle) {
+/*
+    // SG, 09.06.2016 - handle only button changes
+//    } else if ((timeDiff(lastTempButton) > buttonSettle) && (newButton != currentButton)) {     // 4 Bytes more!!
+    } else if (timeDiff(lastTempButton) > buttonSettle) if (newButton != currentButton) {
+//    } else if (newButton != currentButton) if (timeDiff(lastTempButton) > buttonSettle) {     // 16 Bytes more!!
+*/
         // waited long enough to accept the new button state (if not in lock button mode)
 #ifdef _DEBUG
         if (newButton != currentButton) {
@@ -339,15 +360,19 @@ void checkShutter()
                 // 1 = CLOSE
                 // 2 = OPEN
                 //
-                // TODO: move btnStopPos (getClosePos/getOpenPos) into handleButtonStatus and only provide S_MOVE_... and both positions open/close
+                // TODO:
+                //  * maybe integrate desiredState to internalState ( S_MOVE_CLOSE<<2 == S_SHOULD_CLOSE )
+                //  * minimize overhead: determine desiredState and StopPos on button press here, then update status outside if()
                 //
                 if ((newButton & 1) || ((newButton == 0) && (currentButton & 1))) {
                     handleButtonStatus(internalState1, currentPos1, (currentButton & 1), (newButton & 1), lastBtnEvent1, lastLongpress1, stopPos1,
-                        getClosePos(currentPos1, btnClosePos1), lastPosChange1, lastStateChg1, lastMoveLength1, S_MOVE_CLOSE
+                        btnClosePos1, btnOpenPos1, lastPosChange1, lastStateChg1, lastMoveLength1, S_MOVE_CLOSE
+//                        getClosePos(currentPos1, btnClosePos1), lastPosChange1, lastStateChg1, lastMoveLength1, S_MOVE_CLOSE
                     );
                 } else /*if (newButton & 2)*/ {
                     handleButtonStatus(internalState1, currentPos1, (currentButton & 2), (newButton & 2), lastBtnEvent2, lastLongpress2, stopPos1,
-                        getOpenPos(currentPos1, btnOpenPos1), lastPosChange1, lastStateChg1, lastMoveLength1, S_MOVE_OPEN
+                        btnClosePos1, btnOpenPos1, lastPosChange1, lastStateChg1, lastMoveLength1, S_MOVE_OPEN
+//                        getOpenPos(currentPos1, btnOpenPos1), lastPosChange1, lastStateChg1, lastMoveLength1, S_MOVE_OPEN
                     );
                 }
             }
@@ -355,31 +380,32 @@ void checkShutter()
             //
             // 1 button, 2 window mode
             //
-            //
-            // TODO: move btnStopPos (getClosePos/getOpenPos) into handleButtonStatus and only provide S_MOVE_... and both positions open/close
-            //
             if (internalState1 == S_IDLE) {
-                bool doClose = (guessMoveDir(lastPosChange1, lastMoveState1, currentPos1) == S_MOVE_CLOSE);
+//                bool doClose = (guessMoveDir(lastPosChange1, lastMoveState1, currentPos1) == S_MOVE_CLOSE);
                 handleButtonStatus(internalState1, currentPos1, (currentButton & 1), (newButton & 1), lastBtnEvent1, lastLongpress1, stopPos1,
-                    doClose ? getClosePos(currentPos1, btnClosePos1) : getOpenPos(currentPos1, btnOpenPos1),
-                    lastPosChange1, lastStateChg1, lastMoveLength1, doClose ? S_MOVE_CLOSE : S_MOVE_OPEN
+//                    doClose ? getClosePos(currentPos1, btnClosePos1) : getOpenPos(currentPos1, btnOpenPos1),
+                    btnClosePos1, btnOpenPos1,
+                    lastPosChange1, lastStateChg1, lastMoveLength1,
+                    guessMoveDir(lastPosChange1, lastMoveState1, currentPos1)
+//                    doClose ? S_MOVE_CLOSE : S_MOVE_OPEN
                 );
             } else {
                 handleButtonStatus(internalState1, currentPos1, (currentButton & 1), (newButton & 1), lastBtnEvent1, lastLongpress1, stopPos1,
-                    stopPos1,
-                    lastPosChange1, lastStateChg1, lastMoveLength1, internalState1
+                    stopPos1, stopPos1, lastPosChange1, lastStateChg1, lastMoveLength1, internalState1
                 );
             }
             if (internalState2 == S_IDLE) {
-                bool doClose = (guessMoveDir(lastPosChange2, lastMoveState2, currentPos2) == S_MOVE_CLOSE);
+//                bool doClose = (guessMoveDir(lastPosChange2, lastMoveState2, currentPos2) == S_MOVE_CLOSE);
                 handleButtonStatus(internalState2, currentPos2, (currentButton & 2), (newButton & 2), lastBtnEvent2, lastLongpress2, stopPos2,
-                    doClose ? getClosePos(currentPos2, btnClosePos2) : getOpenPos(currentPos2, btnOpenPos2),
-                    lastPosChange2, lastStateChg2, lastMoveLength2, doClose ? S_MOVE_CLOSE : S_MOVE_OPEN
+//                    doClose ? getClosePos(currentPos2, btnClosePos2) : getOpenPos(currentPos2, btnOpenPos2),
+                    btnClosePos2, btnOpenPos2,
+                    lastPosChange2, lastStateChg2, lastMoveLength2,
+                    guessMoveDir(lastPosChange2, lastMoveState2, currentPos2)
+//                    doClose ? S_MOVE_CLOSE : S_MOVE_OPEN
                 );
             } else {
                 handleButtonStatus(internalState2, currentPos2, (currentButton & 2), (newButton & 2), lastBtnEvent2, lastLongpress2, stopPos2,
-                    stopPos2,
-                    lastPosChange2, lastStateChg2, lastMoveLength2, internalState2
+                    stopPos2, stopPos2, lastPosChange2, lastStateChg2, lastMoveLength2, internalState2
                 );
             }
         }
