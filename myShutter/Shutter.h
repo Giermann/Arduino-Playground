@@ -69,7 +69,7 @@
 #define S_IDLE            0x00
 #define S_MOVE_CLOSE      0x01  // keep S_MOVE in sync with buttons (1 = close, 2 = open) ?
 #define S_MOVE_OPEN       0x02
-#define S_REVERSE_REQUEST 0x04
+#define S_RELAY_OFFSET    0x04
 
 // restore EEPROM to default and set client ID:
 // # ID=85
@@ -96,7 +96,6 @@
 #define tempButton      bae910.memory.field.unused0x35
 #define lastButtonADC   bae910.memory.field.adc10       // [uint16_t, read-only] last ADC value read
 
-#define initLast        0xFFFF0000                      // initialize lastPosChange/lastLongpress to -(max uint16_t)
 #define lastTempButton  bae910.memory.field.count       // [uint32_t]
 #define lastPosChange1  bae910.memory.field.adctotp
 #define lastPosChange2  bae910.memory.field.adctotn
@@ -111,16 +110,17 @@
 #define lastMoveLength1 bae910.memory.field.adcap       // [uint16_t, read-only] duration of last movement
 #define lastMoveLength2 bae910.memory.field.adcan
 
+#define openPos          30                             // 100 < 'full open first' < 100+openPos < 'full close first'
 #define invalidPos      101
-#define switchStopPos   150                             // 100 < 'full open first' < switchStopPos < 'full close first'
 #define currentPos1     bae910.memory.field.adc         // [uint8_t, read-only]  0 = opened, 100 = closed
 #define currentPos2     bae910.memory.field.cnt
 #define stopPos1        bae910.memory.field.usera       // [uint8_t]  0..100 | 101..200 = move to one end and back to (stopPos - 100)
 #define stopPos2        bae910.memory.field.userb
 
-#define defaultDirOpen  bae910.memory.field.outc        // [uint8_t]  single button mode: default to up direction if position >50%
+#define defaultDirOpen  bae910.memory.field.outc        // [uint8_t]  single button mode: default to up direction if position >30%
 #define positionFactor1 bae910.memory.field.period1     // [uint16_t] time in ms for 1% movement
 #define positionFactor2 bae910.memory.field.period2
+#define relayOffset     bae910.memory.field.pioc        // [uint8_t]  time in ms between relay on and start moving
 
 #define btnOpenPos1     bae910.memory.field.adcc        // [uint8_t]  move to this position on CLOSE button (move full and back if 0x80 bit set)
 #define btnOpenPos2     bae910.memory.field.cntc
@@ -161,7 +161,6 @@
     uint16_t pc1;
     uint16_t pc0;
     uint16_t cps;   // read-only
-    uint8_t  pioc   // in (copied) EEPROM!
 */
 
 #endif // __SHUTTER_H
