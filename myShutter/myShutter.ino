@@ -10,9 +10,10 @@
  *      07.06.2016 - implement CTRL_SimulateMode, reassigned some variables, fix stopPos from 1-Wire
  *      13.06.2016 - reworked stopPos with S_REVERSE_REQUEST, optimized code size
  *      21.06.2016 - skip 1-Wire poll while moving, add relay offset (keep 0 for now)
- *      22.06.2016 - reworked and simplified button handling, direction guess
+ *      22.06.2016 - reworked and simplified button handling, direction guess [7.490 Bytes]
+ *      24.06.2016 - keep 1-Wire poll while simulating, force OPEN/CLOSE modes [7.472 Bytes]
  *
- *    CODE SIZE:    7.490 Bytes [1.6.9] + 254 SRAM
+ *    CODE SIZE:    7.472 Bytes [1.6.9] + 254 SRAM
  */
 
 #include "Shutter.h"
@@ -53,6 +54,15 @@ BAE910 bae910   = BAE910(BAE910::family_code, onewireClnt, 0x00, 0x00, 0x00, 0x0
 //
 void checkStopPos(uint8_t &currentPos, uint8_t &stopPos)
 {
+    if (stopPos == forceOpenPos) {
+        // force OPEN
+        currentPos = 100;
+        stopPos = 0;
+    } else if (forceClosePos == 222) {
+        // force CLOSE
+        currentPos = 0;
+        stopPos = 100;
+    } else
     if ( (stopPos > 200) || ((currentPos > 0) && (stopPos == (currentPos + 100))) ) {
         stopPos = currentPos;
     } else if (controlEEPROM == CTRL_RestorePos) {  // && (currentPos == invalidPos)
@@ -484,32 +494,19 @@ void setup()
     stopPos2 = invalidPos;
 
     // avoid wrong assumptions after boot (104 Bytes)
-    /* saves 82 Bytes code
-    lastBtnEvent1 = initLast;
-    lastBtnEvent2 = initLast;
-    lastLongpress1 = initLast;
-    lastLongpress2 = initLast;
-    lastPosChange1 = initLast;
-    lastPosChange2 = initLast;
-    */
-    //
-    // TODO: test byte order on Arduino!
-    //
-#ifndef _WINDOWS
-    reinterpret_cast<uint8_t *>(&lastBtnEvent1)[0] = 0xFF;
-    reinterpret_cast<uint8_t *>(&lastBtnEvent2)[0] = 0xFF;
-    reinterpret_cast<uint8_t *>(&lastLongpress1)[0] = 0xFF;
-    reinterpret_cast<uint8_t *>(&lastLongpress2)[0] = 0xFF;
-    reinterpret_cast<uint8_t *>(&lastPosChange1)[0] = 0xFF;
-    reinterpret_cast<uint8_t *>(&lastPosChange2)[0] = 0xFF;
-#else
+    // saves 82 Bytes code
+    //lastBtnEvent1 = initLast;
+    //lastBtnEvent2 = initLast;
+    //lastLongpress1 = initLast;
+    //lastLongpress2 = initLast;
+    //lastPosChange1 = initLast;
+    //lastPosChange2 = initLast;
     reinterpret_cast<uint8_t *>(&lastBtnEvent1)[3] = 0xFF;
     reinterpret_cast<uint8_t *>(&lastBtnEvent2)[3] = 0xFF;
     reinterpret_cast<uint8_t *>(&lastLongpress1)[3] = 0xFF;
     reinterpret_cast<uint8_t *>(&lastLongpress2)[3] = 0xFF;
     reinterpret_cast<uint8_t *>(&lastPosChange1)[3] = 0xFF;
     reinterpret_cast<uint8_t *>(&lastPosChange2)[3] = 0xFF;
-#endif
 #ifndef ARDUINO_attiny
     Serial.print(_T("initialzed lastEvents to 0x"));
     Serial.println(lastBtnEvent1, HEX);
@@ -565,7 +562,8 @@ bool blinking()
 
 void loop()
 {
-    if ((internalState1 == S_IDLE) && (internalState2 == S_IDLE)) {
+    if ((controlEEPROM == CTRL_SimulateMode) ||
+        ((internalState1 == S_IDLE) && (internalState2 == S_IDLE))) {
         // following function must be called periodically
         hub.poll();
 
