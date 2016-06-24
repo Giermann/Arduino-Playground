@@ -88,6 +88,19 @@
 #define CTRL_Save2EEPROM     111                        //  = store config to EEPROM
 #define CTRL_ReloadEEPROM    112                        //  = reload config from EEPROM
 #define CTRL_RestoreDefaults 113                        //  = restore default values (no EEPROM change)
+//
+// TODO: maybe reorder CTRL modes...
+//
+// 4 bits relay state (test) / window num (somfy modes) / eeprom func
+// 1 bit (to keep later) lock button
+// 3 bits: 000 = normal
+//         001 = restore pos (4 bits unused)
+//         010 = simulate    (4 bits unused)
+//         011 = test mode
+//         100 = somfy       (2 bits window / 2 bits mode)
+//         101 = eeprom      (3/16 submodes used)
+//         110 = unused
+//         111 = unused
 
 #define currentMillis   bae910.memory.field.rtc         // [uint32_t]
 #define internalState1  bae910.memory.field.userc       // [uint8_t]
@@ -112,6 +125,8 @@
 
 #define openPos          30                             // 100 < 'full open first' < 100+openPos < 'full close first'
 #define invalidPos      101
+#define forceOpenPos    211
+#define forceClosePos   222
 #define currentPos1     bae910.memory.field.adc         // [uint8_t, read-only]  0 = opened, 100 = closed
 #define currentPos2     bae910.memory.field.cnt
 #define stopPos1        bae910.memory.field.usera       // [uint8_t]  0..100 | 101..200 = move to one end and back to (stopPos - 100)
