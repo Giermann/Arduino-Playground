@@ -3,7 +3,6 @@
  *    (c) 2016 Sven Giermann
  *    
  *    ISSUES:
- *    - move length = 0 after moving up ?
  *
  *    HISTORY:
  *      02.06.2016 - add directionReset==0 (never), implement CTRL_SimulateMode
@@ -12,8 +11,9 @@
  *      21.06.2016 - skip 1-Wire poll while moving, add relay offset (keep 0 for now)
  *      22.06.2016 - reworked and simplified button handling, direction guess [7.490 Bytes]
  *      24.06.2016 - keep 1-Wire poll while simulating, force OPEN/CLOSE modes [7.472 Bytes]
+ *      17.07.2016 - enable setting of both stopPos in one turn, separate posFactor for up/down [7.574 Bytes]
  *
- *    CODE SIZE:    7.472 Bytes [1.6.9] + 254 SRAM
+ *    CODE SIZE:    7.574 Bytes [1.6.9] + 254 SRAM
  */
 
 #include "Shutter.h"
@@ -26,7 +26,7 @@
 #include "BAE910.h"  // 3rd party device
 
 OneWireHub hub  = OneWireHub(onewirePin);
-BAE910 bae910   = BAE910(BAE910::family_code, onewireClnt, 0x00, 0x00, 0x00, 0x00, 0x00);
+BAE910 bae910   = BAE910(BAE910::family_code, onewireClnt, 0x00, 0x00, 0x00, 0x00, 0x00, configVersion);
 
 #ifdef _BLINK
   static uint8_t cntBlink = 0;
@@ -73,27 +73,27 @@ void checkStopPos(uint8_t &currentPos, uint8_t &stopPos)
 //
 // (1) calculate new shutter position
 //
-void updateShutterPos(uint8_t &internalState, uint8_t &currentPos, uint8_t &stopPos, uint32_t &lastPosChange, uint16_t positionFactor)
+void updateShutterPos(uint8_t &internalState, uint8_t &currentPos, uint8_t &stopPos, uint32_t &lastPosChange, uint16_t posFactorClose, uint16_t posFactorOpen)
 {
-    if ((timeDiff(lastPosChange) > relayOffset) && (internalState & S_RELAY_OFFSET)) {
+    if ((timeDiff(lastPosChange) > posRelayOffset) && (internalState & S_RELAY_OFFSET)) {
 #ifdef _DEBUG
-        Serial.print(_T("relayOffset reached @ "));
+        Serial.print(_T("posRelayOffset reached @ "));
         Serial.println(timeDiff(lastPosChange));
 #endif
         internalState -= S_RELAY_OFFSET;
-        lastPosChange += relayOffset;
+        lastPosChange += posRelayOffset;
     }
     if (internalState & S_RELAY_OFFSET) return;
 
     if (internalState & S_MOVE_OPEN) {
-        while ((timeDiff(lastPosChange) > positionFactor) && (currentPos > 0)) {
-            lastPosChange += positionFactor;
+        while ((timeDiff(lastPosChange) > posFactorOpen) && (currentPos > 0)) {
+            lastPosChange += posFactorOpen;
             if (stopPos == currentPos) stopPos--; // do not move back later, when only moved too far
             currentPos--;
         }
     } else if (internalState & S_MOVE_CLOSE) {
-        while ((timeDiff(lastPosChange) > positionFactor) && (currentPos < 100)) {
-            lastPosChange += positionFactor;
+        while ((timeDiff(lastPosChange) > posFactorClose) && (currentPos < 100)) {
+            lastPosChange += posFactorClose;
             if (stopPos == currentPos) stopPos++; // do not move back later, when only moved too far
             currentPos++;
         }
@@ -267,8 +267,8 @@ void checkShutter()
     //
     // update shutter position first, depending on the active time of current state
     //
-    updateShutterPos(internalState1, currentPos1, stopPos1, lastPosChange1, positionFactor1);
-    updateShutterPos(internalState2, currentPos2, stopPos2, lastPosChange2, positionFactor2);
+    updateShutterPos(internalState1, currentPos1, stopPos1, lastPosChange1, posFactorClose1, posFactorOpen1);
+    updateShutterPos(internalState2, currentPos2, stopPos2, lastPosChange2, posFactorClose2, posFactorOpen2);
 
     // SG, 08.03.2016 - wait for ADC to settle, try to minimize faults
     if (newButton != tempButton) {
@@ -360,23 +360,23 @@ void setRelayState(bool bClose1, bool bOpen1, bool bClose2, bool bOpen2)
 
 bool EEPROMget()
 {
-    crcEEPROM = 0;
+    uint16_t crcEEPROM = 0;
 
 // always use default values on windows (wrong byte order)
 #ifndef _WINDOWS
     // stalledcnt, ovruncnt = relayAssignment, minADCidle   0x5A..0x5D
-    for (uint8_t i = 0x1D; i > 0x19; --i) {
-        bae910.memory.bytes[0x3F - i] = EEPROM.read(i); // (i - 0x40) for real address
-        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x3F - i], crcEEPROM);
+    for (uint8_t i = 0x21; i > 0x1D; --i) {
+        bae910.memory.bytes[0x3B - i] = EEPROM.read(i); // (i - 0x44) for real address
+        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x3B - i], crcEEPROM);
     }
 
-    // maxan, maxap = minADCbutton1, minADCbutton2   0x1A..0x1D
-    for (uint8_t i = 0x19; i > 0x15; --i) {
-        bae910.memory.bytes[0x7B - i] = EEPROM.read(i); // (i - 4) for real address
-        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7B - i], crcEEPROM);
+    // pc0, pc1, pc2, pc3 = posFactor(s)   0x36..0x3D
+    for (uint8_t i = 0x1D; i > 0x15; --i) {
+        bae910.memory.bytes[0x5F - i] = EEPROM.read(i); // (i - 0x20) for real address
+        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x5F - i], crcEEPROM);
     }
 
-    // all others 0x00..0x15
+    // all others 0x02..0x15
     for (uint8_t i = 0x15; i > 1; --i) {
         bae910.memory.bytes[0x7F - i] = EEPROM.read(i);
         crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7F - i], crcEEPROM);
@@ -408,13 +408,6 @@ bool EEPROMget()
     // invalid CRC, use hard coded defaults
     //
     clientID = bae910.ID[6];    // 1 wire client ID
-    directionReset  = 15000;    // direction reset in ms
-                                // (default to opposite direction within this time range)
-    setupLength     = 4000;     // duration in ms for both relays ON to enter setup mode
-
-    buttonSettle    = 50;       // button settle (must stay for at least ...ms); 20 sometimes flickers, 200 is slow in response!
-    buttonLongpress = 1500;     // long press length in ms
-    holdLongpress   = 1500;     // hold longpress mode for ...ms
 
     defaultDirOpen  = openPos;  // single button mode: default to up direction if position >30%
 //    defaultDirOpen  = 0;        // two button (single window) mode
@@ -423,9 +416,18 @@ bool EEPROMget()
     btnClosePos1    = 185;      // button CLOSE position A  (100 and back to 85)
     btnClosePos2    = 185;      // button CLOSE position B
 
-    positionFactor1 = 300;      // position factor A
-    positionFactor2 = 300;      // position factor B
-    relayOffset     = 50;       // additional time from switching on a relay until motor moves
+    posFactorClose1 = 300;      // position factor A
+    posFactorOpen1  = 300;
+    posFactorClose2 = 300;      // position factor B
+    posFactorOpen2  = 300;
+    posRelayOffset  = 50;       // additional time from switching on a relay until motor moves
+
+    buttonSettle    = 50;       // button settle (must stay for at least ...ms); 20 sometimes flickers, 200 is slow in response!
+    buttonLongpress = 1500;     // long press length in ms
+    holdLongpress   = 1500;     // hold longpress mode for ...ms
+    directionReset  = 15000;    // direction reset in ms
+                                // (default to opposite direction within this time range)
+    setupLength     = 4000;     // duration in ms for both relays ON to enter setup mode
 
     // measured:  both=620, 2=712, 1=838..839, idle=1023
     minADCbutton2   = 666;      // ADClowButton2 (ex 680)
@@ -438,21 +440,21 @@ bool EEPROMget()
 
 void EEPROMput()
 {
-    crcEEPROM = 0;
+    uint16_t crcEEPROM = 0;
 
     // stalledcnt, ovruncnt = relayAssignment, minADCidle   0x5A..0x5D
-    for (uint8_t i = 0x1D; i > 0x19; --i) {
-        EEPROM.update(i, bae910.memory.bytes[0x3F - i]); // (i - 0x40) for real address
-        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x3F - i], crcEEPROM);
+    for (uint8_t i = 0x21; i > 0x1D; --i) {
+        EEPROM.update(i, bae910.memory.bytes[0x3B - i]); // (i - 0x44) for real address
+        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x3B - i], crcEEPROM);
     }
 
-    // maxan, maxap = minADCbutton1, minADCbutton2   0x1A..0x1D
-    for (uint8_t i = 0x19; i > 0x15; --i) {
-        EEPROM.update(i, bae910.memory.bytes[0x7B - i]); // (i - 4) for real address
-        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7B - i], crcEEPROM);
+    // pc0, pc1, pc2, pc3 = posFactor(s)   0x36..0x3D
+    for (uint8_t i = 0x1D; i > 0x15; --i) {
+        EEPROM.update(i, bae910.memory.bytes[0x5F - i]); // (i - 0x20) for real address
+        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x5F - i], crcEEPROM);
     }
 
-    // all others 0x00..0x15
+    // all others 0x02..0x15
     for (uint8_t i = 0x15; i > 1; --i) {
         EEPROM.update(i, bae910.memory.bytes[0x7F - i]);
         crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7F - i], crcEEPROM);
@@ -585,6 +587,12 @@ void loop()
         //
         // check data for validity
         //
+        if (stopPosBoth <= 200) {
+            // copy stopPosBoth to stopPos and reset to 'idle'
+            stopPos1 = stopPosBoth;
+            stopPos2 = stopPosBoth;
+            stopPosBoth = 255;
+        }
         checkStopPos(currentPos1, stopPos1);
         checkStopPos(currentPos2, stopPos2);
         // here or inside checkStopPos - makes no difference
