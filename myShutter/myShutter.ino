@@ -26,6 +26,10 @@
 #include "BAE910.h"  // 3rd party device
 
 OneWireHub hub  = OneWireHub(onewirePin);
+// unique ID:
+// __TIME__ == 'xx:xx:xx'
+// volatile const static char timeID[] PROGMEM = __TIME__;
+// BAE910 bae910   = BAE910(BAE910::family_code, onewireClnt, timeID[1], timeID[3], timeID[4], timeID[6], timeID[7], configVersion);
 BAE910 bae910   = BAE910(BAE910::family_code, onewireClnt, 0x00, 0x00, 0x00, 0x00, 0x00, configVersion);
 
 #ifdef _BLINK
@@ -416,6 +420,7 @@ bool EEPROMget()
     btnClosePos1    = 185;      // button CLOSE position A  (100 and back to 85)
     btnClosePos2    = 185;      // button CLOSE position B
 
+    // measured: WZ close 268, open 293
     posFactorClose1 = 300;      // position factor A
     posFactorOpen1  = 300;
     posFactorClose2 = 300;      // position factor B
@@ -486,6 +491,9 @@ void setup()
     Serial.println(_T("Shutter controller with OneWire-Hub"));
 #endif
 
+    // add some randomness for uninitialized EEPROM (6 bytes code)
+    //bae910.ID[6] = 255 - ((((char*)__TIME__)[6] - '0') * 10) - (((char*)__TIME__)[7] - '0');
+    //bae910.ID[6] = ((((char*)__TIME__)[6] - '0') * 10) + (((char*)__TIME__)[7] - '0');
     EEPROMget();
     controlEEPROM = CTRL_ReloadEEPROM; // attach to hub in main loop
 
