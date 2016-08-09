@@ -11,9 +11,10 @@
  *      21.06.2016 - skip 1-Wire poll while moving, add relay offset (keep 0 for now)
  *      22.06.2016 - reworked and simplified button handling, direction guess [7.490 Bytes]
  *      24.06.2016 - keep 1-Wire poll while simulating, force OPEN/CLOSE modes [7.472 Bytes]
- *      17.07.2016 - enable setting of both stopPos in one turn, separate posFactor for up/down [7.574 Bytes]
+ *      17.07.2016 - enable setting of both stopPos in one turn, separate posFactor for up/down [7.574 Bytes - wrong checkStopPos]
+ *      09.08.2016 - fix new EEPROM addresses and stopPosBoth [7.624 Bytes]
  *
- *    CODE SIZE:    7.574 Bytes [1.6.9] + 254 SRAM
+ *    CODE SIZE:    7.624 Bytes [1.6.9] + 254 SRAM
  */
 
 #include "Shutter.h"
@@ -62,12 +63,11 @@ void checkStopPos(uint8_t &currentPos, uint8_t &stopPos)
         // force OPEN
         currentPos = 100;
         stopPos = 0;
-    } else if (forceClosePos == 222) {
+    } else if (stopPos == forceClosePos) {
         // force CLOSE
         currentPos = 0;
         stopPos = 100;
-    } else
-    if ( (stopPos > 200) || ((currentPos > 0) && (stopPos == (currentPos + 100))) ) {
+    } else if ( (stopPos >= invalidPos) || ((currentPos > 0) && (stopPos == (currentPos + 100))) ) {
         stopPos = currentPos;
     } else if (controlEEPROM == CTRL_RestorePos) {  // && (currentPos == invalidPos)
         currentPos = stopPos;
@@ -369,19 +369,19 @@ bool EEPROMget()
 // always use default values on windows (wrong byte order)
 #ifndef _WINDOWS
     // stalledcnt, ovruncnt = relayAssignment, minADCidle   0x5A..0x5D
-    for (uint8_t i = 0x21; i > 0x1D; --i) {
-        bae910.memory.bytes[0x3B - i] = EEPROM.read(i); // (i - 0x44) for real address
-        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x3B - i], crcEEPROM);
+    for (uint8_t i = 0x5D; i >= 0x5A; --i) {
+        bae910.memory.bytes[0x7F - i] = EEPROM.read(i);
+        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7F - i], crcEEPROM);
     }
 
     // pc0, pc1, pc2, pc3 = posFactor(s)   0x36..0x3D
-    for (uint8_t i = 0x1D; i > 0x15; --i) {
-        bae910.memory.bytes[0x5F - i] = EEPROM.read(i); // (i - 0x20) for real address
-        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x5F - i], crcEEPROM);
+    for (uint8_t i = 0x3D; i >= 0x36; --i) {
+        bae910.memory.bytes[0x7F - i] = EEPROM.read(i);
+        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7F - i], crcEEPROM);
     }
 
     // all others 0x02..0x15
-    for (uint8_t i = 0x15; i > 1; --i) {
+    for (uint8_t i = 0x15; i >= 0x02; --i) {
         bae910.memory.bytes[0x7F - i] = EEPROM.read(i);
         crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7F - i], crcEEPROM);
     }
@@ -448,19 +448,19 @@ void EEPROMput()
     uint16_t crcEEPROM = 0;
 
     // stalledcnt, ovruncnt = relayAssignment, minADCidle   0x5A..0x5D
-    for (uint8_t i = 0x21; i > 0x1D; --i) {
-        EEPROM.update(i, bae910.memory.bytes[0x3B - i]); // (i - 0x44) for real address
-        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x3B - i], crcEEPROM);
+    for (uint8_t i = 0x5D; i >= 0x5A; --i) {
+        EEPROM.update(i, bae910.memory.bytes[0x7F - i]);
+        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7F - i], crcEEPROM);
     }
 
     // pc0, pc1, pc2, pc3 = posFactor(s)   0x36..0x3D
-    for (uint8_t i = 0x1D; i > 0x15; --i) {
-        EEPROM.update(i, bae910.memory.bytes[0x5F - i]); // (i - 0x20) for real address
-        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x5F - i], crcEEPROM);
+    for (uint8_t i = 0x3D; i >= 0x36; --i) {
+        EEPROM.update(i, bae910.memory.bytes[0x7F - i]);
+        crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7F - i], crcEEPROM);
     }
 
     // all others 0x02..0x15
-    for (uint8_t i = 0x15; i > 1; --i) {
+    for (uint8_t i = 0x15; i >= 0x02; --i) {
         EEPROM.update(i, bae910.memory.bytes[0x7F - i]);
         crcEEPROM = BAE910::crc16(bae910.memory.bytes[0x7F - i], crcEEPROM);
     }
@@ -500,8 +500,9 @@ void setup()
     // initialize invalid position; open on first move (18 Bytes)
     currentPos1 = invalidPos;
     currentPos2 = invalidPos;
-    stopPos1 = invalidPos;
-    stopPos2 = invalidPos;
+    stopPos1    = invalidPos;
+    stopPos2    = invalidPos;
+    stopPosBoth = invalidPos;
 
     // avoid wrong assumptions after boot (104 Bytes)
     // saves 82 Bytes code
@@ -595,11 +596,11 @@ void loop()
         //
         // check data for validity
         //
-        if (stopPosBoth <= 200) {
+        if (stopPosBoth < invalidPos) {
             // copy stopPosBoth to stopPos and reset to 'idle'
             stopPos1 = stopPosBoth;
             stopPos2 = stopPosBoth;
-            stopPosBoth = 255;
+            stopPosBoth = invalidPos;
         }
         checkStopPos(currentPos1, stopPos1);
         checkStopPos(currentPos2, stopPos2);
