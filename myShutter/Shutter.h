@@ -103,8 +103,8 @@
 //         111 = unused
 
 #define currentMillis   bae910.memory.field.rtc         // [uint32_t]
-#define internalState1  bae910.memory.field.userc       // [uint8_t]
-#define internalState2  bae910.memory.field.userd
+#define internalState1  bae910.memory.field.userg       // [uint8_t]
+#define internalState2  bae910.memory.field.userh
 #define currentButton   bae910.memory.field.pio         // [uint8_t]  1 or 2; 3 = 1+2
 #define tempButton      bae910.memory.field.unused0x35
 #define lastButtonADC   bae910.memory.field.adc10       // [uint16_t, read-only] last ADC value read
@@ -125,14 +125,14 @@
 #define relayState      bae910.memory.field.out         // [uint8_t]
 
 #define openPos          30                             // 100 < 'full open first' < 100+openPos < 'full close first'
-#define invalidPos      101
+#define invalidPos      201
 #define forceOpenPos    211
 #define forceClosePos   222
 #define currentPos1     bae910.memory.field.adc         // [uint8_t, read-only]  0 = opened, 100 = closed
 #define currentPos2     bae910.memory.field.cnt
 #define stopPos1        bae910.memory.field.usera       // [uint8_t]  0..100 | 101..200 = move to one end and back to (stopPos - 100)
 #define stopPos2        bae910.memory.field.userb
-#define stopPosBoth     bae910.memory.field.userh       // [uint8_t] used to set both stop positions in one turn via 1-Wire
+#define stopPosBoth     bae910.memory.field.userc       // [uint8_t] used to set both stop positions in one turn via 1-Wire
 
 // configuration values
 #define clientID        bae910.memory.field.alarmc      // [uint8_t]  1 wire client ID (maybe duty4?)
@@ -167,7 +167,7 @@
     uint16_t userk;
     uint16_t userj;
     uint16_t useri;
-    uint8_t  userg;
+    uint8_t  userd;
     uint16_t maxcps;
     uint16_t selectcnt;
     uint16_t resetcnt;
